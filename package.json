@@ -1,9 +1,0 @@
-{
-  "name": "freestyle-tic-tac-toe",
-  "version": "1.0.0",
-  "private": true,
-  "description": "Freestyle X O - a 3x5 grid of independent tic-tac-toe boards, with AI, 2-player, and online multiplayer modes.",
-  "dependencies": {
-    "@netlify/blobs": "^8.1.0"
-  }
-}
