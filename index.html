@@ -619,7 +619,7 @@ function applyModeUI() {
         ruleWin.textContent   = 'Most mini-boards won = winner. Whoever has more takes the match!';
     } else {
         ruleTurns.textContent = 'Host a room to get a code, or join with a friend\u2019s code';
-        ruleWin.textContent   = 'Most mini-boards won = winner. Works best from within Claude.';
+        ruleWin.textContent   = 'Most mini-boards won = winner. Share the code with a friend anywhere!';
     }
     nameError.style.display = 'none';
     if (mode !== 'online') validateName(false);
@@ -650,7 +650,28 @@ function generateRoomCode() {
     for (let i = 0; i < 5; i++) code += ROOM_CODE_CHARS[Math.floor(Math.random() * ROOM_CODE_CHARS.length)];
     return code;
 }
-function roomKey(code) { return 'room:' + code; }
+function roomKey(code) { return code; }
+
+// ── ROOM API (talks to netlify/functions/room.js, backed by Netlify Blobs) ──
+const ROOM_API = '/api/room';
+
+async function roomApiSet(code, stateObj) {
+    const res = await fetch(ROOM_API + '?code=' + encodeURIComponent(code), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(stateObj)
+    });
+    if (!res.ok) throw new Error('Room sync failed (' + res.status + ')');
+    return true;
+}
+
+async function roomApiGet(code) {
+    const res = await fetch(ROOM_API + '?code=' + encodeURIComponent(code), { cache: 'no-store' });
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error('Room fetch failed (' + res.status + ')');
+    const data = await res.json();
+    return data; // parsed room state object, or null if the room doesn't exist
+}
 
 function freshBoards() {
     return {
@@ -670,12 +691,12 @@ function buildRoomState(status) {
 }
 
 async function pushOnlineState(status) {
-    if (mode !== 'online' || !roomCode || !window.storage) return;
+    if (mode !== 'online' || !roomCode) return;
     onlineSeq++;
     const state = buildRoomState(status || (gameOver ? 'over' : 'playing'));
     state.seq = onlineSeq;
     try {
-        await window.storage.set(roomKey(roomCode), JSON.stringify(state), true);
+        await roomApiSet(roomCode, state);
     } catch (err) {
         console.error('Failed to sync room state:', err);
     }
@@ -702,16 +723,14 @@ function stopOnlinePolling() {
 }
 
 async function pollOnlineState() {
-    if (mode !== 'online' || !roomCode || !window.storage) return;
-    let res;
-    try {
-        res = await window.storage.get(roomKey(roomCode), true);
-    } catch (err) {
-        return; // room may briefly not exist yet, or a transient error
-    }
-    if (!res) return;
+    if (mode !== 'online' || !roomCode) return;
     let state;
-    try { state = JSON.parse(res.value); } catch { return; }
+    try {
+        state = await roomApiGet(roomCode);
+    } catch (err) {
+        return; // transient network error, try again next poll
+    }
+    if (!state) return;
 
     // Host waiting room: opponent just joined
     if (onlineRole === 'host' && gameState === 'waitingRoom' && state.status !== 'waiting' && state.p2Name) {
@@ -781,11 +800,6 @@ function showOnlineEndScreen() {
 }
 
 async function createRoom() {
-    if (!window.storage) {
-        nameError.textContent = 'Online play needs this game running inside Claude.';
-        nameError.style.display = 'block';
-        return;
-    }
     const name = hostNameInput.value.trim();
     if (!name) { nameError.textContent = 'Please enter a name'; nameError.style.display = 'block'; hostNameInput.focus(); return; }
 
@@ -802,9 +816,9 @@ async function createRoom() {
     scoreX = 0; scoreO = 0; gameOver = false;
 
     try {
-        await window.storage.set(roomKey(roomCode), JSON.stringify(buildRoomState('waiting')), true);
+        await roomApiSet(roomCode, buildRoomState('waiting'));
     } catch (err) {
-        nameError.textContent = 'Could not create the room, try again.';
+        nameError.textContent = 'Could not create the room — check your connection and try again.';
         nameError.style.display = 'block';
         return;
     }
@@ -819,32 +833,21 @@ async function createRoom() {
 }
 
 async function joinRoom() {
-    if (!window.storage) {
-        nameError.textContent = 'Online play needs this game running inside Claude.';
-        nameError.style.display = 'block';
-        return;
-    }
     const name = joinNameInput.value.trim();
     const code = joinCodeInput.value.trim().toUpperCase();
     if (!name) { nameError.textContent = 'Please enter a name'; nameError.style.display = 'block'; joinNameInput.focus(); return; }
     if (!code) { nameError.textContent = 'Please enter a room code'; nameError.style.display = 'block'; joinCodeInput.focus(); return; }
 
-    let res;
+    let state;
     try {
-        res = await window.storage.get(roomKey(code), true);
+        state = await roomApiGet(code);
     } catch (err) {
         nameError.textContent = 'Room not found. Check the code and try again.';
         nameError.style.display = 'block';
         return;
     }
-    if (!res) {
+    if (!state) {
         nameError.textContent = 'Room not found. Check the code and try again.';
-        nameError.style.display = 'block';
-        return;
-    }
-    let state;
-    try { state = JSON.parse(res.value); } catch {
-        nameError.textContent = 'That room looks invalid. Try a different code.';
         nameError.style.display = 'block';
         return;
     }
@@ -867,9 +870,9 @@ async function joinRoom() {
 
     const newState = buildRoomState('playing');
     try {
-        await window.storage.set(roomKey(roomCode), JSON.stringify(newState), true);
+        await roomApiSet(roomCode, newState);
     } catch (err) {
-        nameError.textContent = 'Could not join the room, try again.';
+        nameError.textContent = 'Could not join the room — check your connection and try again.';
         nameError.style.display = 'block';
         return;
     }
